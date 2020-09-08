@@ -6,6 +6,7 @@ from distributed_processing.serializers import JsonSerializer
 from distributed_processing.worker import Worker
 from distributed_processing.redis_connector import RedisConnector
 
+# prueba
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
 REDIS_DB = 0
