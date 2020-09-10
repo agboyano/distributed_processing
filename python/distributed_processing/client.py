@@ -253,3 +253,6 @@ class Client():
         py_call = serialize_python_call(fn, args=args, kwargs=kwargs)
         id = self.send_single_request("eval_py_function", args=py_call)
         return AsyncResult(self, id)
+
+    def rpc_sync_fn(self, method, args=[], kwargs={}, timeout=None):
+        return self.rpc_async_fn(method, args, kwargs).get(timeout)

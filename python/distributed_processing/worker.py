@@ -42,9 +42,11 @@ class Worker():
 
     def add_requests_queue(self, name, func_dict, register=True):
         """
-        register sólo hace referena a la publicacion
-        las funciones iguen estando disponibles
-        Hay colas que puede que no quiera hacer públicas por ej. porque tiene muchos métodos
+        Si register es False las funciones (métodos) y las colas en 
+        las que están disponibles no se hacen públicas. Sin embargo,
+        las funciones siguen estando disponibles, aunque anónimamente.
+        Hay colas que puede que no queramos hacer públicas
+        por ej. porque tienen muchos métodos
         """
 
         requests_queue = self.connector.get_requests_queue(name)
@@ -53,10 +55,17 @@ class Worker():
             self.queues_to_register.add(requests_queue)
         # no olvidar self.update_registry()
 
-    def add_function(self, queue, fn_name, fn):
+    def add_function(self, queue, fn_name, fn, register=True):
         requests_queue = self.connector.get_requests_queue(queue)
-        self.requests_queues[requests_queue][fn_name] = fn
+
+        if requests_queue not in self.requests_queues:
+            self.add_requests_queue(queue, {fn_name: fn}, register)
+        else:
+            self.requests_queues[requests_queue][fn_name] = fn
         # no olvidar self.update_registry()
+
+    def add_python_eval(self, queue="py_eval", register=True):
+        self.add_function(queue, "eval_py_function", eval_py_function, register)
 
     def add_requests_queues(self, queues):
         for name in queues:
@@ -66,6 +75,7 @@ class Worker():
     def update_methods_registry(self):
         queues_to_register = {k: v for (k, v) in self.requests_queues.items()
                               if k in self.queues_to_register}
+
         self.connector.register_methods(queues_to_register)
 
     def process_request(self, msg, request_queue):
@@ -162,7 +172,7 @@ class Worker():
         if len(sorted_queues) == 0:
             raise ValueError("No queues to listen.")
 
-        #pop_multiple devuelve el nombre de la cola y el resultadado o None si timeout
+        # pop_multiple devuelve el nombre de la cola y el resultadado o None si timeout
         request_with_priority = self.connector.pop_multiple(sorted_queues, timeout=timeout)
 
         if request_with_priority is not None:

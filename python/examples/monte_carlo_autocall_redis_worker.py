@@ -10,7 +10,7 @@ from distributed_processing.redis_connector import RedisConnector
 REDIS_HOST = "localhost"
 REDIS_PORT = 6379
 REDIS_DB = 0
-NAMESPACE = "montecarlo"
+NAMESPACE = "montecarlos"
 
 
 def new_price(S_t, v, r, t1, t2):

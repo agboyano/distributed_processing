@@ -1,8 +1,8 @@
 import traceback
 
 
-def single_request(fname, args=None, kwargs=None, id=None, is_notification=False, reply_to=None, **options):
-    sr = {"method": fname}
+def single_request(method, args=None, kwargs=None, id=None, is_notification=False, reply_to=None, **options):
+    sr = {"method": method}
 
     args = None if args is None or len(args) == 0 else args
     kwargs = None if kwargs is None or len(kwargs) == 0 else kwargs
