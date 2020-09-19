@@ -196,4 +196,15 @@ def f2(x):
                                 dates=dates)
 
 
+def mc_autocall_empty_mapper(rndg, nsimulations,
+                   v=V,
+                   r=R, 
+                   coupon_barrier=COUPON_BARRIER,
+                   kickout_barrier=KICKOUT_BARRIER,
+                   protection_barrier=PROTECTION_BARRIER,
+                   coupon_rate=COUPON_RATE,
+                   dates=dates):
+    
+
+    return 1045.0, float(nsimulations)
     

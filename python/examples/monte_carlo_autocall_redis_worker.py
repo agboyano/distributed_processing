@@ -39,7 +39,8 @@ if __name__ == "__main__":
     server = Worker(JsonSerializer(), redis_connector)
 
     server.add_requests_queue("cola_1", {"mc_autocall_mp":mc_autocall_mapper.mc_autocall_mapper,
-                                    "mc_autocall_mp2":mc_autocall_mapper.mc_autocall_mapper2})
+                                         "mc_autocall_mp2":mc_autocall_mapper.mc_autocall_mapper2,
+                                         "mc_autocall_empty":mc_autocall_mapper.mc_autocall_empty_mapper})
 
     server.update_methods_registry()
 
