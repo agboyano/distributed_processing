@@ -6,7 +6,6 @@ import dill
 from .messages import single_request
 from .async_result import AsyncResult
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -62,7 +61,7 @@ class Client():
         self.registry = self.connector.methods_registry()
 
     def select_queue(self, method):
-        if self.check_registry == "allways":
+        if self.check_registry == "always":
             requests_queue = self.connector.random_queue_for_method(method)
             if requests_queue is None:
                 raise ValueError(f"Method {method} does not exist/is not available.")
@@ -95,11 +94,12 @@ class Client():
         self.connector.enqueue(requests_queue, serialized_sr)
         logger.debug(f"Sent request with id: {id_} to queue {requests_queue}")
 
+
         self.pending[id_] = time.time()
         return id_
 
     def all_queues_for_method(self, method):
-        if self.check_registry == "allways":
+        if self.check_registry == "always":
             requests_queues = self.connector.all_queues_for_method(method)
             if requests_queues == []:
                 raise ValueError(f"Method {method} does not exist/is not available.")

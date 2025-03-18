@@ -117,10 +117,7 @@ class Worker():
 
         if "id" in request:
             try:
-                #reply_to = self.connector.get_reply_to_from_id(request["id"])
-                id_str = request["id"]
-                reply_to = ":".join(id_str.split(":")[:-1]) + ":responses"
-                return reply_to
+                return self.connector.get_reply_to_from_id(request["id"])
             except:
                 return None
 
