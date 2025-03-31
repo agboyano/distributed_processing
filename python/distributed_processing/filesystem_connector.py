@@ -96,7 +96,7 @@ class FileSystemConnector(object):
         return random.choice(available)
 
     def all_queues_for_method(self, method):
-        method_set = f"method_{method}"
+        method_set = f"method_queues_{method}"
         return [x for x in self.variables[method_set]]
 
     def enqueue(self, queue, msg):

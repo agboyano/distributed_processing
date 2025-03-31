@@ -8,7 +8,7 @@ from .messages import result_response, error_response, is_single_request, is_bat
 
 
 logger = logging.getLogger(__name__)
-
+logger.setLevel(logging.DEBUG)
 
 def eval_py_function(str_fn, args=[], kwargs={}):
     "str_fn encoded en base64 ascii"
@@ -37,7 +37,7 @@ class Worker():
         self.reply_to_default = reply_to_default
 
         self.server_id = server_id if server_id is not None else self.connector.get_server_id()
-
+        print("kkkkkkkkk")
         logging.info(f"Worker id: {self.server_id}")
 
     def add_requests_queue(self, name, func_dict, register=True):
@@ -86,11 +86,11 @@ class Worker():
             return error_response(-32700, with_trace=self.with_trace)
 
         if is_single_request(request):
-            logger.debug(f"Recieved single request in queue {request_queue}")
+            logger.debug(f"Received single request in queue {request_queue}")
             return self._process_single_request(request, request_queue)
 
         elif is_batch_request(request):
-            logger.debug(f"Recieved single request in queue {request_queue}")
+            logger.debug(f"Received single request in queue {request_queue}")
             if len(request) == 0:
                 return error_response(-32600)
 
@@ -183,6 +183,8 @@ class Worker():
 
                 id_ = one_single_response.get("id", None)
                 reply_to = one_single_response.get("reply_to", None)
+
+                print(f"Processed request with id {id_} in queue {request_queue}")
 
                 logger.debug(f"Processed request with id {id_} in queue {request_queue}")
 

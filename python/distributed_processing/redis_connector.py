@@ -72,12 +72,13 @@ class RedisConnector(object):
 
     def random_queue_for_method(self, method):
         available = self.all_queues_for_method(method)
+        print(available)
         if len(available) == 0:
             return None
         return random.choice(available)
 
     def all_queues_for_method(self, method):
-        method_set = f"{self.namespace}:method:{method}"
+        method_set = f"{self.namespace}:method_queues:{method}"
         return [x.decode("utf8") for x in self.connection.smembers(method_set)]
 
     def enqueue(self, queue, msg):
