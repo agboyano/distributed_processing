@@ -72,7 +72,6 @@ class RedisConnector(object):
 
     def random_queue_for_method(self, method):
         available = self.all_queues_for_method(method)
-        print(available)
         if len(available) == 0:
             return None
         return random.choice(available)

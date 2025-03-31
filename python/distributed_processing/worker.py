@@ -37,7 +37,6 @@ class Worker():
         self.reply_to_default = reply_to_default
 
         self.server_id = server_id if server_id is not None else self.connector.get_server_id()
-        print("kkkkkkkkk")
         logging.info(f"Worker id: {self.server_id}")
 
     def add_requests_queue(self, name, func_dict, register=True):
