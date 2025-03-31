@@ -154,7 +154,7 @@ class FSUDict:
 
 class FSList():
     
-    def __init__(self, base_path: str, temp_dir: str, serializer=joblib_serializer, ext="pkl", prec=50):
+    def __init__(self, base_path: str, temp_dir: str, serializer=joblib_serializer, prec=50):
         self.data = FSUDict(base_path, temp_dir, serializer)
         self.base_path = self.data.base_path
         self.serializer = serializer
@@ -278,9 +278,12 @@ class FSList():
 
 
 class FSNamespace:
-    def __init__(self, base_path: str, temp_dir: str, serializer=joblib_serializer):
+    def __init__(self, base_path: str, temp_dir=None, serializer=joblib_serializer):
         self.base_path = Path(base_path).resolve()
-        self.temp_dir = Path(temp_dir).resolve()
+        if temp_dir is None:
+            self.temp_dir = self.base_path / "tmp"
+        else:
+            self.temp_dir = Path(temp_dir).resolve()
         
         self.base_path.mkdir(parents=True, exist_ok=True)
         self.temp_dir.mkdir(parents=True, exist_ok=True)

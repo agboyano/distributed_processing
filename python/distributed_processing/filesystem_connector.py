@@ -1,7 +1,7 @@
 import time
 import random
 import logging
-from fsutils import FSDict, FSList, all_lists
+import fsutils
 
 def sleep(a, b=None):
     if b is None:
@@ -9,20 +9,17 @@ def sleep(a, b=None):
     else:
         time.sleep(random.uniform(a,b ))
 
-
 logger = logging.getLogger(__name__)
 
-
 class FileSystemConnector(object):
-    def __init__(self, directory, namespace="tasks", serializer=None):
-        self.directory = directory
-        self.serializer = serializer
-        self.variables = FSDict(directory, "variables", namespace="namespace", serializer=serializer)
-        self.namespace = namespace
+    def __init__(self, base_path, temp_dir=None, serializer=fsutils.structs.joblib_serializer):
+        self.namespace = fsutils.structs.FSNamespace(base_path, temp_dir, serializer)
+        self.variables = self.namespace.udict("variables")
+        self.with_watchdog = True
 
     def clean_namespace(self):
         "Borra todos los objetos vinculados al namespace"
-        self.variables.clear_namespace()
+        self.namespace.clear()
 
     def get_requests_queue(self, queue_name):
         return f"requests_{queue_name}"
@@ -53,8 +50,8 @@ class FileSystemConnector(object):
         """
         Lo usa el cliente.
         Cada método tiene un set de redis con clave {namespace}:method_queues:{method}.
-        El contenido del set son los nombres de las colas donde se puden enviar
-        los request para elecutar ese método.
+        El contenido del set son los nombres de las colas donde se pueden enviar
+        los request para ejecutar ese método.
         """
         registry = {}
 
@@ -71,7 +68,7 @@ class FileSystemConnector(object):
     def register_methods(self, requests_queues_dict):
         """
         Lo usa el servidor para registrar los métodos.
-        requests_queues_dict es un diccionario  con el nombre (corto) de las colas
+        requests_queues_dict es un diccionario con el nombre (corto) de las colas
         de clave y un diccionario con los nombres de las funciones de claves y la función de valor
         """
         registry = {}
@@ -100,7 +97,7 @@ class FileSystemConnector(object):
         return [x for x in self.variables[method_set]]
 
     def enqueue(self, queue, msg):
-        lst = FSList(directory=self.directory, name=queue, namespace=self.namespace, serializer=self.serializer)
+        lst = self.namespace.list(queue)
         lst.append(msg)
 
     def pop(self, queue, timeout=0):
@@ -109,37 +106,69 @@ class FileSystemConnector(object):
         Lo usa el cliente.
         Devuelve tupla (nombre cola, valor). Si timeout devuelve None
         """
-        lst = FSList(directory=self.directory, name=queue, namespace=self.namespace, serializer=self.serializer)
-        
-        start = time.time()
+        lst = self.namespace.list(queue)       
+
         if timeout==0:
             timeout=1000
 
-        while (time.time() - start) < timeout:
-            try:
-                return (queue, lst.pop(0))
-            except IndexError:
+        start = time.time()
+        if self.with_watchdog:
+            while True:
+                try:
+                    return (queue, lst.pop(0))
+                except IndexError:
+                    pass
+                except KeyError:
+                    pass
+                _ = fsutils.watchdog.wait_until_file_event([lst.base_path], [], ["created"], timeout=60)
                 sleep(0.1, 0.5)
-        return None
+                
+                if (time.time() - start) > timeout:
+                    return None
+        else:
+            while (time.time() - start) < timeout:
+                try:
+                    return (queue, lst.pop(0))
+                except IndexError:
+                    pass
+                except KeyError:
+                    pass
+                sleep(0.1, 0.5)
+            return None
 
     def pop_multiple(self, queues, timeout=0):
         """
         Queues ordenadas por prioridad. 
-        Devuelve None si timeout, si no devuelve cola, valor.
+        Devuelve None si timeout, si no devuelve (cola, valor).
         Lo usa el worker.
         """
-        lol = [(x, FSList(directory=self.directory, name=x, namespace=self.namespace, serializer=self.serializer)) for x in queues]
+        lol = [(x, self.namespace.list(x)) for x in queues]
+        dirs = [x[1].base_path for x in lol]
 
-        start = time.time()
         if timeout==0:
             timeout=1000
-
-        while (time.time() - start) < timeout:
-            for queue, lst in lol:
-                try:
-                    return (queue, lst.pop(0))
-                except IndexError:
-                    sleep(0.1, 0.5)
+        
+        start = time.time()
+        if self.with_watchdog:
+            while (time.time() - start) < timeout:
+                for queue, lst in lol:
+                    try:
+                        return (queue, lst.pop(0))
+                    except IndexError:
+                        pass
+                    except KeyError:
+                        pass
+                _ = fsutils.watchdog.wait_until_file_event(dirs, [], ["created"], timeout=60)
+        else:
+            while (time.time() - start) < timeout:
+                for queue, lst in lol:
+                    try:
+                        return (queue, lst.pop(0))
+                    except IndexError:
+                        pass
+                    except KeyError:
+                        pass
+                sleep(0.1, 0.5)
         return None
 
     def pop_all(self, queue):
@@ -147,6 +176,6 @@ class FileSystemConnector(object):
         Extrae de la cola y devuelve todos los mensajes disponibles en la cola queue. 
         Lo usa el cliente
         """
-        lst = FSList(directory=self.directory, name=queue, namespace=self.namespace, serializer=self.serializer)
+        lst = self.namespace.list(queue)
         N = len(lst)
         return [lst.pop(0) for i in range(N)]

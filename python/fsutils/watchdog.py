@@ -70,7 +70,7 @@ def wait_until(dir_list, f=lambda x: True, timeout=60):
             file.name,
         )
 
-    return (None, None, None)  # Return None if no event occurred within timeout
+    return (None, None, None, None)  # Return None if no event occurred within timeout
 
 
 def wait_until_file_event(dir_list, filenames, events=[], strict=False, timeout=60):
@@ -82,6 +82,9 @@ def wait_until_file_event(dir_list, filenames, events=[], strict=False, timeout=
             return False
 
         name = Path(x.src_path).resolve().name
+        if len(filenames) == 0:
+            return True
+        
         for f in filenames:
             if strict:
                 if f == name:
