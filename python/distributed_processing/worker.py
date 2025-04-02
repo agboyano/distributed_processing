@@ -8,7 +8,7 @@ from .messages import result_response, error_response, is_single_request, is_bat
 
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+#logger.setLevel(logging.DEBUG)
 
 def eval_py_function(str_fn, args=[], kwargs={}):
     "str_fn encoded en base64 ascii"
@@ -17,7 +17,6 @@ def eval_py_function(str_fn, args=[], kwargs={}):
 
 class Worker():
     def __init__(self, serializer, connector, server_id=None, with_trace=True, reply_to_default=None):
-
         self.serializer = serializer
         self.connector = connector
 
@@ -35,9 +34,8 @@ class Worker():
         # Sólo se utiliza si el request que recibimos no tiene una clave "reply_to".
         # Si es None obtiene el "reply_to" de la "id" de la request recibida
         self.reply_to_default = reply_to_default
-
         self.server_id = server_id if server_id is not None else self.connector.get_server_id()
-        logging.info(f"Worker id: {self.server_id}")
+        logger.info(f"Worker id: {self.server_id}")
 
     def add_requests_queue(self, name, func_dict, register=True):
         """
@@ -168,7 +166,7 @@ class Worker():
         if len(sorted_queues) == 0:
             raise ValueError("No queues to listen.")
 
-        # pop_multiple devuelve el nombre de la cola y el resultadado o None si timeout
+        # pop_multiple devuelve el nombre de la cola y el resultado o None si timeout
         request_with_priority = self.connector.pop_multiple(sorted_queues, timeout=timeout)
 
         if request_with_priority is not None:
@@ -182,9 +180,6 @@ class Worker():
 
                 id_ = one_single_response.get("id", None)
                 reply_to = one_single_response.get("reply_to", None)
-
-                print(f"Processed request with id {id_} in queue {request_queue}")
-
                 logger.debug(f"Processed request with id {id_} in queue {request_queue}")
 
                 if not one_single_response["is_notification"] and reply_to is not None:
@@ -200,7 +195,7 @@ class Worker():
     def run(self, timeout=None):
         if timeout is None or timeout <= 0:
             forever = True
-            timeout = 0
+            timeout = 0 # forever
         else:
             t_0 = time.time()
             forever = False

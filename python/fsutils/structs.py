@@ -2,7 +2,6 @@ import json
 import math
 import os
 import pickle
-import re
 import shutil
 import uuid
 from ast import literal_eval
@@ -31,6 +30,8 @@ class FSSerializer:
 def pickle_dump(value, filename):
     with open(filename, 'wb') as f:
         pickle.dump(value, f, protocol=pickle.HIGHEST_PROTOCOL)
+        f.flush()
+        os.fsync(f.fileno())
 
 def pickle_load(filename):
     with open(filename, 'rb') as f:
@@ -41,6 +42,8 @@ pickle_serializer = FSSerializer(pickle_dump, pickle_load, "pkl")
 def json_dump(value, filename):
     with open(filename, 'w', encoding='utf-8') as f:
         json.dump(value, f)
+        f.flush()
+        os.fsync(f.fileno())
 
 def json_load(filename):
     with open(filename, 'r') as f:
@@ -49,7 +52,11 @@ def json_load(filename):
 json_serializer = FSSerializer(json_dump, json_load, "json")
 
 def joblib_dump(value, filename):
-    return joblib.dump(value, filename)
+    with open(filename, 'wb') as f:
+        joblib.dump(value, f) # a joblib.dump le puedo pasar una cadena o un file handler
+        f.flush()
+        os.fsync(f.fileno())
+
 
 def joblib_load(filename):
     return joblib.load(filename)
@@ -150,6 +157,21 @@ class FSUDict:
             return self[key]
         else:
             return default
+    
+    def pop(self, key):
+        try:
+            if self.fast:
+                value = self[key]
+                del self[key]
+            else:
+                temp_path = self.temp_dir / f"tmp_{uuid.uuid4().hex}"
+                target_path = self.base_path / self._key_to_filename(key)  
+                target_path.rename(temp_path)
+                value = self.load(temp_path)
+                temp_path.unlink()
+            return value
+        except FileNotFoundError:
+            raise KeyError(key)
 
 
 class FSList():
@@ -256,9 +278,7 @@ class FSList():
     
     def pop(self, index=-1):
         ix = self.keys()[index]
-        value = self.data[ix]
-        del self.data[ix]
-        return value
+        return self.data.pop(ix)
     
     def pop_left(self):
         keys = self.keys()
@@ -269,9 +289,7 @@ class FSList():
         i = 0
         while i < N:
             try:
-                value = self.data[keys[i]]
-                del self.data[keys[i]]
-                return value
+                return self.data.pop(keys[i])
             except KeyError:
                 i += random.choice([1,1,1,1,2,2,2,3,3,4])
         raise KeyError("pop_left: something bad happened")

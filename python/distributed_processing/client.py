@@ -18,7 +18,6 @@ def serialize_python_call(fn, args=[], kwargs={}):
 class Client():
     def __init__(self, serializer, connector, client_id=None, check_registry="cache",
                  use_reply_to=False, default_queue="default", timeout=24*60*60):
-
         self.serializer = serializer
         self.connector = connector
 
@@ -187,7 +186,10 @@ class Client():
     def _get_response(self, id, clean=True):
         if id in self.responses:
             val = self.responses[id]
-            del self.pending[id]
+            try:
+                del self.pending[id]
+            except KeyError:
+                pass
             if clean:
                 self._clean_response(id)
             return (True, val)
@@ -240,14 +242,39 @@ class Client():
         return self.rpc_async(method, args, kwargs).get(timeout)
 
     def rpc_batch_async(self, requests_lst):
-        "espera una lista de tuplas (fname, args, kwargs)"
+        """
+        Envía una petición batch que ejecutará un único worker.
+        requests_lst: lista de tuplas [(fname, args, kwargs), ...]
+        """
         ids = self.send_batch_request(requests_lst)
         return [AsyncResult(self, id) for id in ids]
 
     def rpc_batch_sync(self, requests_lst, timeout=None):
-        "espera una lista de tuplas (fname, args, kwargs)"
+        """
+        Envía una petición batch que ejecutará un único worker.
+        requests_lst: lista de tuplas [(fname, args, kwargs), ...]
+        Utiliza safe_get, si hay un error en una función, devuelve None.
+        """
         fs = self.rpc_batch_async(requests_lst)
-        return [f.get(timeout=timeout) for f in fs]
+        return [f.safe_get(timeout=timeout) for f in fs]
+    
+    def rpc_multi_async(self, requests_lst, timeout=None):
+        """
+        Envía una petición multiple. 
+        Los workers disponibles se repartirán los items.
+        requests_lst: lista de tuplas [(fname, args, kwargs), ...]
+        """
+        return [self.rpc_async(t[0], t[1], t[2]) for t in requests_lst]
+
+    def rpc_multi_sync(self, requests_lst, timeout=None):
+        """
+        Envía una petición multiple. 
+        Los workers disponibles se repartirán los items.
+        requests_lst: lista de tuplas [(fname, args, kwargs), ...]
+        Utiliza safe_get, si hay un error en una función, devuelve None.
+        """
+        fs = self.rpc_multi_async(requests_lst)
+        return [f.safe_get(timeout=timeout) for f in fs]
 
     def rpc_async_fn(self, fn, args=[], kwargs={}):
         py_call = serialize_python_call(fn, args=args, kwargs=kwargs)
