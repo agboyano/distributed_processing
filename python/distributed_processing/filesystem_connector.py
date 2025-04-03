@@ -42,55 +42,18 @@ class FileSystemConnector(object):
     def get_reply_to_from_id(self, id_str):
         return id_str.split(":")[0] + "_responses"
 
-    def wait_until_lock_release(
-        self, lock_name, ntries=5, watchdog_timeout=10, wait=(0.0, 0.1)
-    ):
-        for i in range(ntries):
-            if lock_name not in self.variables:
-                return True
-            e, _, _, _ = fsutils.watchdog.wait_until_file_event(
-                [self.variables.base_path],
-                [lock_name],
-                ["deleted", "moved"],
-                timeout=watchdog_timeout,
-            )
-            if e is not None:
-                return True
-            sleep(*wait)
-
-        logger.warning(f"{lock_name} not released: tried {i + 1} times")
-        return False
-
-    def set_lock(self, lock_name, ntries=5, timeout=10):
-        if lock_name not in self.variables:
-            ok = True
-            logger.debug(f"{lock_name} lock set: tried 0 times")
-        elif self.wait_until_lock_release(lock_name, ntries, timeout):
-            ok = True
-            logger.debug(f"{lock_name} lock set")
-        else:
-            ok = False
-            logger.warning(f"{lock_name} set anyway")
-
-        self.variables[lock_name] = ok
-        return ok
-
-    def unset_lock(self, lock_name):
-        del self.variables[lock_name]
-        logger.debug("{lock_name} unset")
-
     def get_client_id(self):
-        self.set_lock("nclients_lock", self.ntries_register_lock)
+        fsutils.structs.set_lock(self.variables, "nclients_lock", 5, 10, (0, 0.2))
         nclients = self.variables.get("nclients", 0) + 1
         self.variables["nclients"] = nclients
-        self.unset_lock("nclients_lock")
+        fsutils.structs.unset_lock(self.variables, "nclients_lock")
         return f"fs_client_{nclients}"
 
     def get_server_id(self):
-        self.set_lock("nservers_lock", self.ntries_register_lock)
+        fsutils.structs.set_lock(self.variables, "nservers_lock", 10, 10, (0, 0.2))
         nservers = self.variables.get("nservers", 0) + 1
         self.variables["nservers"] = nservers
-        self.unset_lock("nservers_lock")
+        fsutils.structs.unset_lock(self.variables, "nservers_lock")
         return f"fs_server_{nservers}"
 
     def methods_registry(self):
@@ -101,11 +64,11 @@ class FileSystemConnector(object):
         los request para ejecutar ese método.
         """
         registry = {}
-        self.set_lock("registry_lock", self.ntries_register_lock)
+        fsutils.structs.set_lock(self.variables, "registry_lock", 10, 10, (0, 0.2))
         try:
             method_queues = [x for x in self.variables.keys() if "method_queues_" in x]
         finally:
-            self.unset_lock("registry_lock")
+            fsutils.structs.unset_lock(self.variables, "registry_lock")
 
         for method_set in method_queues:
             method = method_set.replace("method_queues_", "")
@@ -139,7 +102,7 @@ class FileSystemConnector(object):
             for method in func_dict:
                 registry[method] = registry.get(method, []) + [queue_name]
 
-        self.set_lock("registry_lock", self.ntries_register_lock)
+        fsutils.structs.set_lock(self.variables, "registry_lock", 10, 10, (0, 0.2))
         try:
             for method in registry:
                 method_set = f"method_queues_{method}"
@@ -150,7 +113,7 @@ class FileSystemConnector(object):
                     f"Method {method} published as available for queues: {colas}"
                 )
         finally:
-            self.unset_lock("registry_lock")
+            fsutils.structs.unset_lock(self.variables, "registry_lock")
 
     def random_queue_for_method(self, method):
         available = self.all_queues_for_method(method)
