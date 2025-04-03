@@ -36,83 +36,62 @@ class FileSystemConnector(object):
     def get_requests_queue(self, queue_name):
         return f"requests_{queue_name}"
 
-    def get_client_id(self):
-        """
-        Cuidado. No atómico.
-        """
-        if "nclients_set" not in self.variables:
-            self.variables["nclients_set"] = True
-            self.variables["nclients"] = 1
-            nclients = 1
-            return f"fs_client_{nclients}"
-
-        ntries = 0
-        while ntries < 5:
-            try:
-                nclients = self.variables.pop("nclients")
-                self.variables["nclients"] = nclients + 1
-                return f"fs_client_{nclients}"
-            except KeyError:
-                pass
-            ntries += 1
-            sleep(0.1, 1.0)
-
-    def get_server_id(self):
-        """
-        Cuidado. No atómico.
-        """
-        if "nservers_set" not in self.variables:
-            self.variables["nservers_set"] = True
-            self.variables["nservers"] = 1
-            nservers = 1
-            return f"fs_client_{nservers}"
-
-        ntries = 0
-        while ntries < 5:
-            try:
-                nservers = self.variables.pop("nservers")
-                self.variables["nservers"] = nservers + 1
-                return f"fs_client_{nservers}"
-            except KeyError:
-                pass
-            ntries += 1
-            sleep(0.1, 1.0)
-
     def get_responses_queue(self, client_id):
         return f"{client_id}_responses"
 
     def get_reply_to_from_id(self, id_str):
         return id_str.split(":")[0] + "_responses"
 
-    def wait_until_registry_lock_release(self, ntries):
+    def wait_until_lock_release(
+        self, lock_name, ntries=5, watchdog_timeout=10, wait=(0.0, 0.1)
+    ):
         for i in range(ntries):
-            if "registry_lock" not in self.variables:
-                return
+            if lock_name not in self.variables:
+                return True
             e, _, _, _ = fsutils.watchdog.wait_until_file_event(
                 [self.variables.base_path],
-                ["registry_lock"],
+                [lock_name],
                 ["deleted", "moved"],
-                timeout=self.registry_timeout,
+                timeout=watchdog_timeout,
             )
             if e is not None:
-                return
-        logger.warning(f"registry_lock not released: tried {i + 1} times")
+                return True
+            sleep(*wait)
 
-    def lock_registry(self, ntries=5):
-        for i in range(ntries):
-            if "registry_lock" not in self.variables:
-                self.variables["registry_lock"] = True
-                logger.debug(f"registry_lock locked: tried {i + 1} times")
-                return
-            self.wait_until_registry_lock_release(5)
-            if i < ntries:
-                sleep(0.1, 0.5)
-        self.variables["registry_lock"] = True
-        logger.warning(f"registry_lock set anyway: tried {i + 1} times")
+        logger.warning(f"{lock_name} not released: tried {i + 1} times")
+        return False
 
-    def unlock_registry(self):
-        del self.variables["registry_lock"]
-        logger.debug("registry_lock unlocked")
+    def set_lock(self, lock_name, ntries=5, timeout=10):
+        if lock_name not in self.variables:
+            ok = True
+            logger.debug(f"{lock_name} lock set: tried 0 times")
+        elif self.wait_until_lock_release(lock_name, ntries, timeout):
+            ok = True
+            logger.debug(f"{lock_name} lock set")
+        else:
+            ok = False
+            logger.warning(f"{lock_name} set anyway")
+
+        self.variables[lock_name] = ok
+        return ok
+
+    def unset_lock(self, lock_name):
+        del self.variables[lock_name]
+        logger.debug("{lock_name} unset")
+
+    def get_client_id(self):
+        self.set_lock("nclients_lock", self.ntries_register_lock)
+        nclients = self.variables.get("nclients", 0) + 1
+        self.variables["nclients"] = nclients
+        self.unset_lock("nclients_lock")
+        return f"fs_client_{nclients}"
+
+    def get_server_id(self):
+        self.set_lock("nservers_lock", self.ntries_register_lock)
+        nservers = self.variables.get("nservers", 0) + 1
+        self.variables["nservers"] = nservers
+        self.unset_lock("nservers_lock")
+        return f"fs_server_{nservers}"
 
     def methods_registry(self):
         """
@@ -122,11 +101,11 @@ class FileSystemConnector(object):
         los request para ejecutar ese método.
         """
         registry = {}
-        self.lock_registry(self.ntries_register_lock)
+        self.set_lock("registry_lock", self.ntries_register_lock)
         try:
             method_queues = [x for x in self.variables.keys() if "method_queues_" in x]
         finally:
-            self.unlock_registry()
+            self.unset_lock("registry_lock")
 
         for method_set in method_queues:
             method = method_set.replace("method_queues_", "")
@@ -139,8 +118,8 @@ class FileSystemConnector(object):
         """Registers worker's public functions and their associated FIFO queues.
 
         Args:
-            requests_queues_dict: A dictionary mapping queue names to method 
-                                  dictionaries, where each method dictionary has 
+            requests_queues_dict: A dictionary mapping queue names to method
+                                  dictionaries, where each method dictionary has
                                   function names as keys and callable functions as values.
 
                                   {'queue_name': {'function_name': callable_function, ...}, ... }
@@ -148,7 +127,7 @@ class FileSystemConnector(object):
         Client Configuration Options:
             - check_registry='never': Clients must manually specify queues with set_default_queue().
             - check_registry='cache' (default): Clients can update the cache with update_registry().
-            - check_registry='always': Client always checks the latest registry before dispatching. 
+            - check_registry='always': Client always checks the latest registry before dispatching.
                                        Huge overhead.
 
         Note:
@@ -160,7 +139,7 @@ class FileSystemConnector(object):
             for method in func_dict:
                 registry[method] = registry.get(method, []) + [queue_name]
 
-        self.lock_registry(self.ntries_register_lock)
+        self.set_lock("registry_lock", self.ntries_register_lock)
         try:
             for method in registry:
                 method_set = f"method_queues_{method}"
@@ -171,7 +150,7 @@ class FileSystemConnector(object):
                     f"Method {method} published as available for queues: {colas}"
                 )
         finally:
-            self.unlock_registry()
+            self.unset_lock("registry_lock")
 
     def random_queue_for_method(self, method):
         available = self.all_queues_for_method(method)
@@ -212,19 +191,18 @@ class FileSystemConnector(object):
                 pass
 
             if self.with_watchdog:
-                fsutils.watchdog.wait_until_file_event(
+                _ = fsutils.watchdog.wait_until_file_event(
                     [queue.base_path], [], ["created"], timeout=self.pop_timeout
                 )
-                sleep(
-                    *self.pop_sleep_watchdog
-                )  # Wait random time to minimize probability of race conditions
+                # Wait random time to minimize probability of race conditions
+                sleep(*self.pop_sleep_watchdog)
             else:
                 sleep(*self.pop_sleep)  # Standard polling delay
 
         return None  # Timeout reached
 
     def pop_multiple(self, queue_names, timeout=0):
-        """Blocking first item pop from multiple FIFO queues in priority order (highest first).
+        """Blocking pop(0) from multiple FIFO queues in priority order (highest first).
 
         Args:
             queue_names: List of queue names (ordered by priority - highest first)
@@ -253,7 +231,7 @@ class FileSystemConnector(object):
                     continue
 
             if self.with_watchdog:
-                fsutils.watchdog.wait_until_file_event(
+                _ = fsutils.watchdog.wait_until_file_event(
                     watch_paths, [], ["created"], timeout=self.pop_timeout
                 )
                 sleep(*self.pop_sleep_watchdog)
@@ -263,7 +241,7 @@ class FileSystemConnector(object):
         return None  # Timeout expired
 
     def pop_all(self, queue_name):
-        """Pops (in order) all messages available in queue with name queue_name.
+        """Pops all available messages in the queue named queue_name (in order).
 
         Used by clients.
         """
