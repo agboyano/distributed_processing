@@ -3,6 +3,8 @@ import random
 import time
 
 import fsutils
+from fsutils.structs import LockingError
+
 
 
 def sleep(a, b=None):
@@ -43,17 +45,27 @@ class FileSystemConnector(object):
         return id_str.split(":")[0] + "_responses"
 
     def get_client_id(self):
-        fsutils.structs.set_lock(self.variables, "nclients_lock", 5, 10, (0, 0.2))
+        try:
+            fsutils.structs.acquire_lock(self.variables.base_path, "nclients_lock", 60*5, 59, (0, 0.0))
+        except LockingError:
+            fsutils.structs.release_lock(self.variables.base_path, "nclients_lock")
+            fsutils.structs.acquire_lock(self.variables.base_path, "nclients_lock", 60 , 28, (0, 0.0))
+
         nclients = self.variables.get("nclients", 0) + 1
         self.variables["nclients"] = nclients
-        fsutils.structs.unset_lock(self.variables, "nclients_lock")
+        fsutils.structs.release_lock(self.variables.base_path, "nclients_lock")
         return f"fs_client_{nclients}"
 
     def get_server_id(self):
-        fsutils.structs.set_lock(self.variables, "nservers_lock", 10, 10, (0, 0.2))
+        try:
+            fsutils.structs.acquire_lock(self.variables.base_path, "nservers_lock", 60*5, 59, (0, 0.0))
+        except LockingError:
+            fsutils.structs.release_lock(self.variables.base_path, "nservers_lock")
+            fsutils.structs.acquire_lock(self.variables.base_path, "nservers_lock", 60 , 28, (0, 0.0))
+        
         nservers = self.variables.get("nservers", 0) + 1
         self.variables["nservers"] = nservers
-        fsutils.structs.unset_lock(self.variables, "nservers_lock")
+        fsutils.structs.release_lock(self.variables.base_path, "nservers_lock")
         return f"fs_server_{nservers}"
 
     def methods_registry(self):
@@ -64,11 +76,14 @@ class FileSystemConnector(object):
         los request para ejecutar ese método.
         """
         registry = {}
-        fsutils.structs.set_lock(self.variables, "registry_lock", 10, 10, (0, 0.2))
         try:
-            method_queues = [x for x in self.variables.keys() if "method_queues_" in x]
-        finally:
-            fsutils.structs.unset_lock(self.variables, "registry_lock")
+            fsutils.structs.acquire_lock(self.variables.base_path, "registry_lock", 60*5, 59, (0, 0.0))
+        except LockingError:
+            fsutils.structs.release_lock(self.variables.base_path, "registry_lock")
+            fsutils.structs.acquire_lock(self.variables.base_path, "registry_lock", 60 , 28, (0, 0.0))
+
+        method_queues = [x for x in self.variables.keys() if "method_queues_" in x]
+        fsutils.structs.release_lock(self.variables.base_path, "registry_lock")
 
         for method_set in method_queues:
             method = method_set.replace("method_queues_", "")
@@ -102,7 +117,12 @@ class FileSystemConnector(object):
             for method in func_dict:
                 registry[method] = registry.get(method, []) + [queue_name]
 
-        fsutils.structs.set_lock(self.variables, "registry_lock", 10, 10, (0, 0.2))
+        try:
+            fsutils.structs.acquire_lock(self.variables.base_path, "registry_lock", 60*5, 59, (0, 0.0))
+        except LockingError:
+            fsutils.structs.release_lock(self.variables.base_path, "registry_lock")
+            fsutils.structs.acquire_lock(self.variables.base_path, "registry_lock", 60 , 28, (0, 0.0))
+
         try:
             for method in registry:
                 method_set = f"method_queues_{method}"
@@ -113,7 +133,7 @@ class FileSystemConnector(object):
                     f"Method {method} published as available for queues: {colas}"
                 )
         finally:
-            fsutils.structs.unset_lock(self.variables, "registry_lock")
+            fsutils.structs.release_lock(self.variables.base_path, "registry_lock")
 
     def random_queue_for_method(self, method):
         available = self.all_queues_for_method(method)
@@ -149,7 +169,7 @@ class FileSystemConnector(object):
         start_time = time.time()
         while wait_forever or (time.time() - start_time) < timeout:
             try:
-                return (queue_name, queue.pop(0))
+                return (queue_name, queue.pop_left())
             except (IndexError, KeyError):
                 pass
 

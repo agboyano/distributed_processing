@@ -15,10 +15,10 @@ from pathlib import Path
 
 import joblib
 
-from .watchdog import wait_until_file_event
+from .watchdog import wait_until
 
 logger = logging.getLogger(__name__)
-
+logger.setLevel(logging.DEBUG)
 
 def sleep(a, b=None):
     if b is None:
@@ -322,18 +322,19 @@ class FSList:
         return self.data.pop(ix)
 
     def pop_left(self):
-        keys = self.keys()
-        N = len(keys)
-        if N == 0:
-            raise IndexError("pop_left: empty list")
+        try:
+            acquire_lock(self.data.base_path, "pop_left_lock", 60*5, 59, (0, 0.0))
+        except LockingError:
+            release_lock(self.data.base_path, "pop_left_lock")
+            acquire_lock(self.data.base_path, "pop_left_lock", 60 , 28, (0, 0.0))
 
-        i = 0
-        while i < N:
-            try:
-                return self.data.pop(keys[i])
-            except KeyError:
-                i += random.choice([1, 1, 1, 1, 2, 2, 2, 3, 3, 4])
-        raise KeyError("pop_left: something bad happened")
+        try:
+            ix = self.keys()[0]
+            v =  self.data.pop(ix)
+        finally:
+            release_lock(self.data.base_path, "pop_left_lock")
+
+        return v
 
 
 class FSNamespace:
@@ -426,42 +427,43 @@ class LockingError(Exception):
         super().__init__(message)
 
 
-def wait_until_lock_released(
-    fsudict, lock_name, ntries=5, watchdog_timeout=10, wait=(0.0, 0.0)
-):
-    for i in range(ntries):
-        if lock_name not in fsudict:
-            return True
+def acquire_lock(base_path, lock_name, timeout=60, watchdog_timeout=19, wait=(0.0, 0.0)):
+    dir_name = lock_name + ".lock"
+    abs_path = Path(base_path) / dir_name
 
-        e, _, _, _ = wait_until_file_event(
-            [fsudict.base_path],
-            [lock_name],
-            ["deleted", "moved"],
-            timeout=watchdog_timeout,
+    def try_lock():
+        try:
+            # Atomically create a directory (mkdir is atomic on most FS)
+            os.mkdir(abs_path)
+            return True
+        except FileExistsError:
+            return False
+
+    if try_lock():
+        return True
+
+    start_time = time.time()
+    time_left = timeout
+    while time_left > 0.0:
+
+        _ = wait_until(
+            [base_path],
+            lambda x: x.is_directory
+            and x.event_type == "deleted"
+            and dir_name == Path(x.src_path).resolve().name,
+            timeout=min(watchdog_timeout, time_left),
         )
-
-        if e is not None:
-            return True
 
         sleep(*wait)
 
-    logger.warning(f"{lock_name} not released: tried {i + 1} times")
-    return False
+        if try_lock():
+            return True
+
+        time_left = timeout - (time.time() - start_time)
+
+    raise LockingError(f"couldn`t get lock {lock_name}")
 
 
-def set_lock(fsudict, lock_name, ntries=5, watchdog_timeout=10, wait=(0.0, 0.0)):
-    if lock_name not in fsudict:
-        fsudict[lock_name] = True
-        logger.debug(f"{lock_name} lock set: tried 0 times")
-
-    elif wait_until_lock_released(fsudict, lock_name, ntries, watchdog_timeout, wait):
-        fsudict[lock_name] = True
-        logger.debug(f"{lock_name} lock set")
-    else:
-        logger.warning(f"Error: couldn`t get lock {lock_name}")
-        raise LockingError(f"couldn`t get lock {lock_name}")
-
-
-def unset_lock(fsudict, lock_name):
-    del fsudict[lock_name]
+def release_lock(base_path, lock_name):
+    os.rmdir(Path(base_path) / (lock_name + ".lock"))
     logger.debug("{lock_name} unset")
