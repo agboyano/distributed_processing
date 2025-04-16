@@ -196,22 +196,39 @@ class FSUDict:
 
 class TimeOrderedTuple():
     """
-    From python 3.7 time.time() ±1 µs precision 
+    From python 3.7 time.time() ±1 µs precision (not true in windows)
+    Using time.perf_counter_ns() to improve precision to ns. 
+    time.time_ns() not reliable in windows.
     """
 
-    def __init__(self, time_accuracy=1000_000, max_int=1000_000_000, max_random=1000_000):
-        self.time_accuracy = time_accuracy
+    def __init__(self, max_int=1000_000_000, max_random=1000_000):
         self.max_int = max_int
         self.max_random = max_random
+        self.last_rear_time = 0
+        self.last_front_time = 0 
+        self.epoch_start = time.time()
+        self.perf_start = time.perf_counter_ns()
+    
+    def time_ns(self):
+        elapsed_ns = time.perf_counter_ns() - self.perf_start
+        return int(self.epoch_start * 1e9) + elapsed_ns
 
     def random_int(self):
         return int(random.random() * self.max_random)
 
     def new_rear_tuple(self):
-        return (int(time.time() * self.time_accuracy), self.random_int())
+        elapsed = self.time_ns()
+        if elapsed == self.last_rear_time:
+            elapsed += 1
+        self.last_rear_time = elapsed
+        return (elapsed, self.random_int())
     
     def new_front_tuple(self):
-        return (-int(time.time() * self.time_accuracy), self.random_int())
+        elapsed = -self.time_ns()
+        if elapsed == self.last_front_time:
+            elapsed -= 1
+        self.last_front_time = elapsed
+        return (elapsed, self.random_int())
     
     def new_mid_tuple(self, prev_tuple, next_tuple):
         N_prev = len(prev_tuple)
@@ -248,7 +265,7 @@ class FSList:
         return self.key_generator.new_rear_tuple()
 
     def _new_zero_key(self):
-        return self.key_generator.new_rear_tuple()
+        return self.key_generator.new_front_tuple()
 
     def _new_mid_key(self, prev_key, next_key):
         return self.key_generator.new_mid_tuple(prev_key, next_key)
@@ -341,7 +358,7 @@ class FSNamespace:
         self.list_prefix = "li"
         self.prefixes = {self.udict_prefix, self.list_prefix}
 
-    def udict(self, name):
+    def udict(self, name, fast=False):
         nt = [x for x in self.names_types() if x[0] == name]
         if len(nt) > 0 and nt[0][1] != self.udict_prefix:
             raise ValueError(f"{name} exits with type {nt[0][1]}")
@@ -349,6 +366,7 @@ class FSNamespace:
             self.base_path / (self.udict_prefix + self.sep + name),
             self.temp_dir,
             self.serializer,
+            fast=fast
         )
 
     def list(self, name):
@@ -390,7 +408,10 @@ class FSNamespace:
         return [x[0] for x in self.names_types()]
 
     def type(self, name):
-        return [x[1] for x in self.names_types() if x[0] == name][0]
+        try:
+            return [x[1] for x in self.names_types() if x[0] == name][0]
+        except IndexError:
+            return None
 
     def get(self, name):
         nt = [x for x in self.names_types() if x[0] == name]
