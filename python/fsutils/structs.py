@@ -1,7 +1,5 @@
-import datetime
 import json
 import logging
-import math
 import os
 import pickle
 import random
@@ -10,8 +8,9 @@ import time
 import uuid
 from ast import literal_eval
 from dataclasses import dataclass
-from decimal import Decimal, localcontext
 from pathlib import Path
+from contextlib import contextmanager
+
 
 import joblib
 
@@ -193,61 +192,66 @@ class FSUDict:
             return value
         except FileNotFoundError:
             raise KeyError(key)
+        
+
+class TimeOrderedTuple():
+    """
+    From python 3.7 time.time() ±1 µs precision 
+    """
+
+    def __init__(self, time_accuracy=1000_000, max_int=1000_000_000, max_random=1000_000):
+        self.time_accuracy = time_accuracy
+        self.max_int = max_int
+        self.max_random = max_random
+
+    def random_int(self):
+        return int(random.random() * self.max_random)
+
+    def new_rear_tuple(self):
+        return (int(time.time() * self.time_accuracy), self.random_int())
+    
+    def new_front_tuple(self):
+        return (-int(time.time() * self.time_accuracy), self.random_int())
+    
+    def new_mid_tuple(self, prev_tuple, next_tuple):
+        N_prev = len(prev_tuple)
+        N_next = len(next_tuple) 
+        N = max(N_prev, N_next)
+
+        new_tuple = []
+        for i in range(N-1):
+
+            prev_item = prev_tuple[i] if i <= (N_prev - 1) else 0
+            next_item = next_tuple[i] if i <= (N_next - 1) else self.max_int
+
+            new_tuple.append(prev_item) 
+            diff_int = next_item - prev_item
+            if diff_int > 2:
+                new_tuple[i] += int(diff_int / 2.0)
+                new_tuple.append(self.random_int())
+                return tuple(new_tuple)
+
+        new_tuple.append(self.max_int)
+        new_tuple.append(self.random_int())
+        return tuple(new_tuple)
 
 
 class FSList:
-    def __init__(
-        self, base_path: str, temp_dir: str, serializer=joblib_serializer, prec=50
-    ):
+    def __init__(self, base_path: str, temp_dir: str, serializer=joblib_serializer):
         self.data = FSUDict(base_path, temp_dir, serializer)
         self.base_path = self.data.base_path
         self.serializer = serializer
-        self.prec = prec
-        self._zero = Decimal(10000)
-        self._incr = Decimal(100)
-        self.keys_zero = str(self._zero)
-        self.keys_incr = str(self._incr)
-        self.max_penalty = 1000
-        self._zero_date = datetime.datetime.combine(
-            datetime.date(2025, 1, 1), datetime.time(0, 0, 0)
-        )
-        self._zero_timestamp = (
-            Decimal(math.ceil(datetime.datetime.timestamp(self._zero_date) * 1000000))
-            / 1000000
-        )
-        self.id = uuid.uuid4().hex  # round(random.random()*1000000)
-
-    def _random_id(self):
-        return random.random() * 1000000
-
-    def _seconds_elapsed(self):
-        return (
-            Decimal(
-                math.ceil(
-                    datetime.datetime.timestamp(datetime.datetime.now()) * 1000000
-                )
-            )
-            / 1000000
-            - self._zero_timestamp
-        )
+        self.key_generator = TimeOrderedTuple()
+        self.id = uuid.uuid4().hex # v7 is time ordered, not implemented yet
 
     def _append_key(self):
-        return (str(self._seconds_elapsed()), self._random_id())
+        return self.key_generator.new_rear_tuple()
 
     def _new_zero_key(self):
-        return (str(-self._seconds_elapsed()), self._random_id())
+        return self.key_generator.new_rear_tuple()
 
-    def _new_mid_key(self, current_key, current_prev_key):
-        with localcontext() as ctx:
-            ctx.prec = self.prec
-            curr = Decimal(current_key[0])
-            prev = Decimal(current_prev_key[0])
-            new = (curr + prev) / Decimal(2)
-            if new == prev:
-                raise IndexError(
-                    f"Insert: Key collision: Increment precision above {self.prec}"
-                )
-            return (str(new), self._random_id())
+    def _new_mid_key(self, prev_key, next_key):
+        return self.key_generator.new_mid_tuple(prev_key, next_key)
 
     def append(self, value):
         new_key = self._append_key()
@@ -273,7 +277,7 @@ class FSList:
         elif index >= N:
             self.append(value)
         elif 0 < index < N:
-            self.data[self._new_mid_key(keys[index], keys[index - 1])] = value
+            self.data[self._new_mid_key(keys[index-1], keys[index])] = value
         else:
             raise IndexError("list assignment index out of range")
 
@@ -284,14 +288,7 @@ class FSList:
         return [(self.data[k], k) for k in self.keys()]
 
     def keys(self):
-        with localcontext() as ctx:
-            ctx.prec = self.prec
-            return [
-                k
-                for _, k in sorted(
-                    [(Decimal(k[0]), k) for k in self.data.keys()], key=lambda x: x[0]
-                )
-            ]
+        return sorted(self.data.keys())
 
     def __delitem__(self, index):
         del self.data[self.data.keys()[index]]
@@ -322,18 +319,9 @@ class FSList:
         return self.data.pop(ix)
 
     def pop_left(self):
-        try:
-            acquire_lock(self.data.base_path, "pop_left_lock", 60*5, 59, (0, 0.0))
-        except LockingError:
-            release_lock(self.data.base_path, "pop_left_lock")
-            acquire_lock(self.data.base_path, "pop_left_lock", 60 , 28, (0, 0.0))
-
-        try:
+        with lock_context(self.data.base_path, "pop_left_lock", 60*5, 59, (0, 0.0)):
             ix = self.keys()[0]
             v =  self.data.pop(ix)
-        finally:
-            release_lock(self.data.base_path, "pop_left_lock")
-
         return v
 
 
@@ -444,8 +432,9 @@ def acquire_lock(base_path, lock_name, timeout=60, watchdog_timeout=19, wait=(0.
 
     start_time = time.time()
     time_left = timeout
-    while time_left > 0.0:
+    forever = True if timeout < -0.001 else False
 
+    while time_left > 0.0 or forever:
         _ = wait_until(
             [base_path],
             lambda x: x.is_directory
@@ -453,12 +442,11 @@ def acquire_lock(base_path, lock_name, timeout=60, watchdog_timeout=19, wait=(0.
             and dir_name == Path(x.src_path).resolve().name,
             timeout=min(watchdog_timeout, time_left),
         )
-
         sleep(*wait)
 
         if try_lock():
             return True
-
+        
         time_left = timeout - (time.time() - start_time)
 
     raise LockingError(f"couldn`t get lock {lock_name}")
@@ -467,3 +455,12 @@ def acquire_lock(base_path, lock_name, timeout=60, watchdog_timeout=19, wait=(0.
 def release_lock(base_path, lock_name):
     os.rmdir(Path(base_path) / (lock_name + ".lock"))
     logger.debug("{lock_name} unset")
+
+
+@contextmanager
+def lock_context(base_path, lock_name, timeout=60, watchdog_timeout=19, wait=(0.0, 0.0)):
+    acquire_lock(base_path, lock_name, timeout, watchdog_timeout, wait)
+    try:
+        yield  # execution resumes here when the context is entered
+    finally:
+        release_lock(base_path, lock_name)

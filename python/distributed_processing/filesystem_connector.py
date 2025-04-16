@@ -3,8 +3,6 @@ import random
 import time
 
 import fsutils
-from fsutils.structs import LockingError
-
 
 
 def sleep(a, b=None):
@@ -45,27 +43,15 @@ class FileSystemConnector(object):
         return id_str.split(":")[0] + "_responses"
 
     def get_client_id(self):
-        try:
-            fsutils.structs.acquire_lock(self.variables.base_path, "nclients_lock", 60*5, 59, (0, 0.0))
-        except LockingError:
-            fsutils.structs.release_lock(self.variables.base_path, "nclients_lock")
-            fsutils.structs.acquire_lock(self.variables.base_path, "nclients_lock", 60 , 28, (0, 0.0))
-
-        nclients = self.variables.get("nclients", 0) + 1
-        self.variables["nclients"] = nclients
-        fsutils.structs.release_lock(self.variables.base_path, "nclients_lock")
+        with fsutils.lock_context(self.variables.base_path, "nclients_lock", 60*5, 59, (0, 0.0)):
+            nclients = self.variables.get("nclients", 0) + 1
+            self.variables["nclients"] = nclients
         return f"fs_client_{nclients}"
 
     def get_server_id(self):
-        try:
-            fsutils.structs.acquire_lock(self.variables.base_path, "nservers_lock", 60*5, 59, (0, 0.0))
-        except LockingError:
-            fsutils.structs.release_lock(self.variables.base_path, "nservers_lock")
-            fsutils.structs.acquire_lock(self.variables.base_path, "nservers_lock", 60 , 28, (0, 0.0))
-        
-        nservers = self.variables.get("nservers", 0) + 1
-        self.variables["nservers"] = nservers
-        fsutils.structs.release_lock(self.variables.base_path, "nservers_lock")
+        with fsutils.lock_context(self.variables.base_path, "nservers_lock", 60*5, 59, (0, 0.0)):
+            nservers = self.variables.get("nservers", 0) + 1
+            self.variables["nservers"] = nservers
         return f"fs_server_{nservers}"
 
     def methods_registry(self):
@@ -76,19 +62,14 @@ class FileSystemConnector(object):
         los request para ejecutar ese método.
         """
         registry = {}
-        try:
-            fsutils.structs.acquire_lock(self.variables.base_path, "registry_lock", 60*5, 59, (0, 0.0))
-        except LockingError:
-            fsutils.structs.release_lock(self.variables.base_path, "registry_lock")
-            fsutils.structs.acquire_lock(self.variables.base_path, "registry_lock", 60 , 28, (0, 0.0))
 
-        method_queues = [x for x in self.variables.keys() if "method_queues_" in x]
-        fsutils.structs.release_lock(self.variables.base_path, "registry_lock")
+        with fsutils.lock_context(self.variables.base_path, "registry_lock", 60*5, 59, (0, 0.0)):
+            method_queues = [x for x in self.variables.keys() if "method_queues_" in x]
 
-        for method_set in method_queues:
-            method = method_set.replace("method_queues_", "")
-            available = [x for x in self.variables[method_set]]
-            registry[method] = available
+            for method_set in method_queues:
+                method = method_set.replace("method_queues_", "")
+                available = [x for x in self.variables[method_set]]
+                registry[method] = available
 
         return registry
 
@@ -117,13 +98,7 @@ class FileSystemConnector(object):
             for method in func_dict:
                 registry[method] = registry.get(method, []) + [queue_name]
 
-        try:
-            fsutils.structs.acquire_lock(self.variables.base_path, "registry_lock", 60*5, 59, (0, 0.0))
-        except LockingError:
-            fsutils.structs.release_lock(self.variables.base_path, "registry_lock")
-            fsutils.structs.acquire_lock(self.variables.base_path, "registry_lock", 60 , 28, (0, 0.0))
-
-        try:
+        with fsutils.lock_context(self.variables.base_path, "registry_lock", 60*5, 59, (0, 0.0)):
             for method in registry:
                 method_set = f"method_queues_{method}"
                 tmp = self.variables.get(method_set, set())
@@ -132,8 +107,6 @@ class FileSystemConnector(object):
                 logger.info(
                     f"Method {method} published as available for queues: {colas}"
                 )
-        finally:
-            fsutils.structs.release_lock(self.variables.base_path, "registry_lock")
 
     def random_queue_for_method(self, method):
         available = self.all_queues_for_method(method)
