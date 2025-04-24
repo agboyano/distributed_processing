@@ -96,10 +96,12 @@ class FSUDict:
         self.fast = fast
 
     def _key_to_filename(self, key):
-        return repr(key) + "." + self.ext
+        return repr(key).encode().hex() + "." + self.ext
 
     def _filename_to_key(self, filename):
-        return literal_eval(".".join(filename.split(".")[:-1]))
+        s = ".".join(filename.split(".")[:-1])
+        return literal_eval(bytes.fromhex(s).decode())
+        #return literal_eval(".".join(filename.split(".")[:-1]))
 
     def __setitem__(self, key, value) :
         """Store value using atomic write pattern"""
@@ -335,11 +337,16 @@ class FSList:
         ix = self.keys()[index]
         return self.data.pop(ix)
 
-    def pop_left(self):
-        with lock_context(self.data.base_path, "pop_left_lock", 60*5, 59, (0, 0.0)):
+    def pop_left(self, timeout=-1.0, watchdog_timeout=19, wait=(0.0, 0.0)):
+        """
+        timeout: Maximum time to wait in seconds (< 0 = waits indefinitely, 0 = try once)
+        """
+        
+        with lock_context(self.data.base_path, "pop_left_lock", timeout, watchdog_timeout, wait):
             ix = self.keys()[0]
-            v =  self.data.pop(ix)
-        return v
+            v = self.data.pop(ix)
+            return v
+        raise IndexError("pop_left: empty list")
 
 
 class FSNamespace:
@@ -436,7 +443,10 @@ class LockingError(Exception):
         super().__init__(message)
 
 
-def acquire_lock(base_path, lock_name, timeout=60, watchdog_timeout=19, wait=(0.0, 0.0)):
+def acquire_lock(base_path, lock_name, timeout=-1.0, watchdog_timeout=19, wait=(0.0, 0.0)):
+    """
+    timeout: Maximum time to wait in seconds (< 0 = wait indefinitely, 0 = try once)
+    """
     dir_name = lock_name + ".lock"
     abs_path = Path(base_path) / dir_name
 
@@ -449,23 +459,27 @@ def acquire_lock(base_path, lock_name, timeout=60, watchdog_timeout=19, wait=(0.
             return False
 
     if try_lock():
+        logger.debug(f"{lock_name} set")
         return True
 
     start_time = time.time()
     time_left = timeout
-    forever = True if timeout < -0.001 else False
+    wait_forever = True if timeout < -0.001 else False
 
-    while time_left > 0.0 or forever:
+    while time_left > 0.0 or wait_forever:
+        new_watchdog_timeout = watchdog_timeout if wait_forever else min(watchdog_timeout, time_left)
+
         _ = wait_until(
             [base_path],
             lambda x: x.is_directory
             and x.event_type == "deleted"
             and dir_name == Path(x.src_path).resolve().name,
-            timeout=min(watchdog_timeout, time_left),
+            timeout=new_watchdog_timeout,
         )
         sleep(*wait)
 
         if try_lock():
+            logger.debug(f"{lock_name} set")
             return True
         
         time_left = timeout - (time.time() - start_time)
@@ -475,7 +489,7 @@ def acquire_lock(base_path, lock_name, timeout=60, watchdog_timeout=19, wait=(0.
 
 def release_lock(base_path, lock_name):
     os.rmdir(Path(base_path) / (lock_name + ".lock"))
-    logger.debug("{lock_name} unset")
+    logger.debug(f"{lock_name} unset")
 
 
 @contextmanager

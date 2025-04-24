@@ -83,20 +83,23 @@ class RedisConnector(object):
     def enqueue(self, queue, msg):
         self.connection.rpush(queue, msg)
 
-    def pop(self, queue, timeout=0):
+    def pop(self, queue, timeout=-1):
         """
         timeout=0 indefinido
         Lo usa el cliente.
         """
-        return self.connection.blpop(queue, timeout=timeout)
+        # blpop timeout ==0 waits indefinitely
+        return self.connection.blpop(queue, timeout=max(timeout, 0))
 
-    def pop_multiple(self, queues, timeout=0):
+    def pop_multiple(self, queues, timeout=-1):
         """
+        timeout: Maximum wait time in seconds (< 0 = wait indefinitely, 0 = try once)
         Queues ordenadas por prioridad. 
         Devuelve None si timeout, si no devuelve cola, valor.
         Lo usa el worker.
         """
-        request_redis = self.connection.blpop(queues, timeout=timeout)
+        # blpop timeout ==0 waits indefinitely
+        request_redis = self.connection.blpop(queues, timeout=max(timeout, 0))
         if request_redis is not None:
             return request_redis[0].decode("utf8"), request_redis[1]
 

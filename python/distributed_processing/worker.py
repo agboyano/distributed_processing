@@ -87,7 +87,7 @@ class Worker():
             return self._process_single_request(request, request_queue)
 
         elif is_batch_request(request):
-            logger.debug(f"Received single request in queue {request_queue}")
+            logger.debug(f"Received batch request in queue {request_queue}")
             if len(request) == 0:
                 return error_response(-32600)
 
@@ -159,7 +159,7 @@ class Worker():
             return error_response(-32603, id=id_, reply_to=reply_to,
                                   is_notification=is_notification, with_trace=self.with_trace)
 
-    def run_once(self, timeout=0):
+    def run_once(self, timeout=-1):
 
         sorted_queues = self.requests_queues.keys()
 
@@ -174,6 +174,7 @@ class Worker():
             processed = self.process_request(serialized_request, request_queue)
 
             if is_single_response(processed):
+                logger.debug("****** Single response *******")
                 processed = [processed]
 
             for one_single_response in processed:
@@ -195,7 +196,7 @@ class Worker():
     def run(self, timeout=None):
         if timeout is None or timeout <= 0:
             forever = True
-            timeout = 0 # forever
+            timeout = -1.0 # forever
         else:
             t_0 = time.time()
             forever = False

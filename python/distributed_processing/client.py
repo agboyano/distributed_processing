@@ -211,7 +211,7 @@ class Client():
 
         if timeout is None:
             forever = True
-            timeout = 0
+            timeout = -1
 
         else:
             t_0 = time.time()
