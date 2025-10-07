@@ -17,7 +17,7 @@ import joblib
 from .watchdog import wait_until
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+#logger.setLevel(logging.DEBUG)
 
 def sleep(a, b=None):
     if b is None:
@@ -316,10 +316,29 @@ class FSList:
         self.data.clear()
 
     def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [self.data[k] for k in self.keys()[index]]    
         return self.data[self.keys()[index]]
 
     def __setitem__(self, index, value):
-        self.data[self.keys()[index]] = value
+        if isinstance(index, slice):
+            ks = self.keys()
+            li = [x for x in range(len(ks))[index]]
+            step = 1 if index.step is None else index.step       
+            if (len(li) != len(value)) and step !=1:
+                raise ValueError(f"attempt to assign sequence of size {len(value)} to extended slice of size {len(li)}")
+            
+            i = 0
+            for j in li:
+                self.data[ks[j]] = value[i]
+                i += 1
+            
+            if i < (len(value)):
+                for j in range(i, len(value)):
+                    self.append(value[j])
+        else:
+            self.data[self.keys()[index]] = value
+
 
     def __del__(self):
         pass
@@ -332,7 +351,7 @@ class FSList:
 
     def __len__(self):
         return len(self.keys())
-
+    
     def pop(self, index=-1):
         ix = self.keys()[index]
         return self.data.pop(ix)
@@ -340,13 +359,15 @@ class FSList:
     def pop_left(self, timeout=-1.0, watchdog_timeout=19, wait=(0.0, 0.0)):
         """
         timeout: Maximum time to wait in seconds (< 0 = waits indefinitely, 0 = try once)
+        Raises IndexError if no data available in list
+        Raises LockingError if couldn't get Lock or timeout trying
         """
         
         with lock_context(self.data.base_path, "pop_left_lock", timeout, watchdog_timeout, wait):
             ix = self.keys()[0]
             v = self.data.pop(ix)
             return v
-        raise IndexError("pop_left: empty list")
+        raise IndexError("pop_left: empty list") # It should not happen
 
 
 class FSNamespace:
