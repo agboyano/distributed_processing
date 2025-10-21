@@ -22,12 +22,20 @@ class Client():
         self.connector = connector
 
         self.use_reply_to = use_reply_to
-
+        
+        #Cache for pending responses with id. 
+        #ids as keys and time() of message creation as values. 
         self.pending = {}
-
+        #Cache for responses with id.
+        #ids as keys and deserialized responses as values.
         self.responses = {}
+        #Cache for responses with no id.
+        #Deserialized responses as values.
         self.responses_no_id = []
+        #Cache for responses that failed to be deserialized.
         self.responses_parse_errors = []
+        #Used responses (wait_one_response).
+        self.responses_used = set()
 
         self.check_registry = check_registry
         self.registry = {}
@@ -80,6 +88,16 @@ class Client():
         return requests_queue
 
     def send_single_request(self, method, args=None, kwargs=None, **options):
+        """Sends a single request.
+
+        Args:
+            method (str): Remote function name.
+            args (list): Positional arguments.
+            kwargs (dict): Named arguments.
+        
+        Returns:
+            str: id of the request.
+        """
 
         requests_queue = self.select_queue(method)
 
@@ -92,7 +110,6 @@ class Client():
 
         self.connector.enqueue(requests_queue, serialized_sr)
         logger.debug(f"Sent request with id: {id_} to queue {requests_queue}")
-
 
         self.pending[id_] = time.time()
         return id_
@@ -114,7 +131,16 @@ class Client():
         return requests_queues
 
     def send_batch_request(self, requests_lst, **options):
-        "espera una lista de tuplas (fname, args, kwargs)"
+        """Sends an batch request that will be executed by a single worker.
+    
+        Args:
+            requests_lst (list): List of tuples [(fname, args, kwargs), ...]
+            **options (named args): Opcional args that will added to the rpc
+                message in the 'options' key.
+        
+        Returns:
+            list(str): List of ids of the individual sent requests. 
+        """
 
         queues_sets = [set(self.all_queues_for_method(x[0])) for x in requests_lst]
 
@@ -142,12 +168,31 @@ class Client():
 
         return ids
 
-    def _responses_to_dicts(self, json_lst):
+    def _responses_to_dicts(self, raw_responses):
+        """Deserialize responses.
+
+        Args:
+            raw_responses (list): List of responses (serialized), usually from pop or pop_all.
+
+        Returns: 
+            (results_dict, no_id, parse_errors)
+
+            results_dict (dict): Dictionary with the ids of the request as keys
+                and the deserialized response as value. The deserialized response 
+                is a dict with either the key "result" or "error". The get method 
+                of the AsyncResult instance, associated with the id, returns the "result", 
+                if available, or throws an exception with the information in "error".
+                    
+            no_id (list): List with all the deserialized responses that have no id.
+            
+            parse_errors (list): List with all the responses that failed to be deserialized.
+        """
+
         results_dict = {}
         no_id = []
         parse_errors = []
 
-        for e in json_lst:
+        for e in raw_responses:
             try:
                 r = self.serializer.loads(e)
 
@@ -155,14 +200,16 @@ class Client():
                 parse_errors.append(e)
                 continue
 
-            if isinstance(r, list):  # respuesta a un batch request
+            if isinstance(r, list):  # response to batch request
                 for rr in r:
+                    rr["finished_time"] = time.time()
                     if "id" in rr:
                         results_dict[rr["id"]] = rr
                     else:
                         no_id.append(rr)
 
             elif isinstance(r, dict):
+                r["finished_time"] = time.time()
                 if "id" in r:
                     results_dict[r["id"]] = r
                 else:
@@ -170,116 +217,258 @@ class Client():
 
         return results_dict, no_id, parse_errors
 
-    def _update_responses_cache(self, responses):
-        responses_dict, no_id, parse_errors = self._responses_to_dicts(responses)
+    def _update_responses_cache(self, raw_responses):
+        """Deserialize raw_responses and update caches. 
+
+        Updates the client caches responses, responses_no_id, responses_parse_errors and pending.
+
+        Args:
+            raw_responses (list): List of responses (serialized), usually from pop or pop_all.
+        """
+        responses_dict, no_id, parse_errors = self._responses_to_dicts(raw_responses)
         self.responses.update(responses_dict)
         self.responses_no_id.append(no_id)
         self.responses_parse_errors.append(parse_errors)
+        pending = [k for k in self.pending.keys()]
+        for id in pending:
+            if id in self.responses:
+                del self.pending[id]
 
-    def _fetch_all_available_responses(self):
+    def _update_cache_with_all_available_responses(self):
         all_responses = self.connector.pop_all(self.responses_queue)
         self._update_responses_cache(all_responses)
 
-    def _clean_response(self, id):
-        del self.responses[id]
+    def wait_responses(self, ids=None, timeout=None):
+        """Wait for all responses in ids.
 
-    def _get_response(self, id, clean=True):
-        if id in self.responses:
-            val = self.responses[id]
-            try:
-                del self.pending[id]
-            except KeyError:
-                pass
-            if clean:
-                self._clean_response(id)
-            return (True, val)
-        else:
-            return (False, None)
+        If ids is None, waits for all pending ids.
 
-    def wait_response(self, id, timeout=None, clean=True):
+        Args:
+            ids (list, optional): List of ids. Defaults to None.
+            timeout (float, optional): Defaults to None (self.timeout).
+                If 0, check queue once.
+        
+        Returns:
+            list: Pending ids if timeout, [] if ok.
+       
+        Raises:
+            TimeoutError
+            ValueError: If there are ids neither in responses nor in pending.
+        """
 
         if timeout is None:
             timeout = self.timeout
 
-        if id not in self.responses:
-            self._fetch_all_available_responses()
+        if ids is None:
+            ids = [k for k in self.pending.keys()]
+        else:
+            tmp = [k for k in ids if k not in self.responses and k not in self.pending]    
+            if len(tmp) > 0:
+                raise ValueError(f"wait_responses: {tmp} neither in responses nor in pending.")
 
-        available, response = self._get_response(id, clean=clean)
+        pending = [k for k in ids if k not in self.responses]
 
-        if available:
-            return response
+        if len(pending)>0:
+            self._update_cache_with_all_available_responses() 
+        else:
+            return []
+
+        pending = [k for k in pending if k not in self.responses]
 
         if timeout is None:
-            forever = True
-            timeout = -1
+            forever, time_left = True, -1
 
         else:
             t_0 = time.time()
-            forever = False
-            time_left = timeout
+            forever, time_left = False, timeout
 
-        while forever or time_left > 0:
-
+        while (len(pending)>0) and ((time_left > 0.000001) or forever):
             next_resp = self.connector.pop(self.responses_queue, timeout=time_left)
 
-            if next_resp is not None:  # si es None es por Timeout
+            if next_resp is not None:  # if None then timeout, if not (queue_name, value)
                 self._update_responses_cache([next_resp[1]])
-
-            available, response = self._get_response(id, clean=clean)
-            if available:
-                return response
 
             if not forever:
                 time_left = timeout - (time.time() - t_0)
 
-        raise TimeoutError()
+            pending = [k for k in pending if k not in self.responses]
+
+        return pending
+
+    def wait_one_response(self, id, timeout=None, clean=True):
+        """Wait for the response with id=id.
+
+        Used by de get method of AsyncResult.
+
+        Args:
+            id (str):
+            timeout (float, optional): Defaults to None (self.timeout).
+                If 0, check queue once.
+            clean (bool, optional): If True remove the result from cache.
+                Defaults to True. 
+        
+        Returns:
+            dict: Response deserialized) with either the key "result" or "error". 
+                The get method of the AsyncResult instance, associated with the id, 
+                returns the "result", if available, or throws an exception with the 
+                information in "error".
+
+        Raises:
+            TimeoutError
+            ValueError: If id neither in responses nor in pending.
+        """
+        if len(self.wait_responses([id], timeout)) > 0:
+            raise TimeoutError()
+
+        response = self.responses[id]
+        self.responses_used.add(id)
+        
+        if clean:
+            del self.responses[id]
+
+        return response
+
+    def clean_used(self):
+        """Clean all responses that have been used at least once.
+        """
+        responses = [k for k in self.responses]
+        for id in responses:
+            if id in self.responses_used:
+                del self.responses[id]
 
     def rpc_async(self, method, args=[], kwargs={}):
+        """Sends an asynchronous single request.
+    
+        Args:
+            method (str): Remote function name.
+            args (list): Positional args.
+            kwargs (dict): Named args.
+        
+        Returns:
+            AsyncResult
+        """
         id = self.send_single_request(method, args, kwargs)
         return AsyncResult(self, id)
 
     def rpc_sync(self, method, args=[], kwargs={}, timeout=None):
+        """Sends an asynchronous single request.
+    
+        Args:
+            method (str): Remote function name.
+            args (list): Positional args.
+            kwargs (dict): Named args.
+            timeout (float, optional): Defaults to None (self.timeout).
+                If 0, check queue once.
+            
+        Returns:
+            result
+
+        Raises:
+            TimeoutError
+            RemoteException
+        """
         return self.rpc_async(method, args, kwargs).get(timeout)
 
     def rpc_batch_async(self, requests_lst):
-        """
-        Envía una petición batch que ejecutará un único worker.
-        requests_lst: lista de tuplas [(fname, args, kwargs), ...]
+        """Sends an asynchronous batch request that will be executed by a single worker.
+    
+        Args:
+            requests_lst (list): List of tuples [(fname, args, kwargs), ...]
+        
+        Returns:
+            list: List of AsyncResult objects
         """
         ids = self.send_batch_request(requests_lst)
         return [AsyncResult(self, id) for id in ids]
 
     def rpc_batch_sync(self, requests_lst, timeout=None):
-        """
-        Envía una petición batch que ejecutará un único worker.
-        requests_lst: lista de tuplas [(fname, args, kwargs), ...]
-        Utiliza safe_get, si hay un error en una función, devuelve None.
+        """Sends a synchronous batch request that will be executed by a single worker.
+        
+        Waits for the results. 
+        Uses safe_get, if there's an error in a function, returns None.
+        
+        Args:
+            requests_lst (list): List of tuples [(fname, args, kwargs), ...]
+            timeout (float, optional): Defaults to None (self.timeout).
+                If 0, check queue once.
+            
+        Returns:
+            list: List of (results or None on error)
+
+        Raises:
+            TimeoutError
         """
         fs = self.rpc_batch_async(requests_lst)
         return [f.safe_get(timeout=timeout) for f in fs]
     
-    def rpc_multi_async(self, requests_lst, timeout=None):
-        """
-        Envía una petición multiple. 
-        Los workers disponibles se repartirán los items.
-        requests_lst: lista de tuplas [(fname, args, kwargs), ...]
+    def rpc_multi_async(self, requests_lst):
+        """Sends multiple asynchronous requests that will be distributed among workers.
+        
+        Args:
+            requests_lst (list): List of tuples [(fname, args, kwargs), ...].
+            
+        Returns:
+            list: List of AsyncResult objects.
         """
         return [self.rpc_async(t[0], t[1], t[2]) for t in requests_lst]
 
     def rpc_multi_sync(self, requests_lst, timeout=None):
-        """
-        Envía una petición multiple. 
-        Los workers disponibles se repartirán los items.
-        requests_lst: lista de tuplas [(fname, args, kwargs), ...]
-        Utiliza safe_get, si hay un error en una función, devuelve None.
+        """Sends multiple synchronous requests that will be distributed among workers.
+        
+        Waits for the results. 
+        Uses safe_get, if there's an error in a function, returns None.
+
+        Args:
+            requests_lst (list): List of tuples [(fname, args, kwargs), ...]
+            timeout (float, optional): Defaults to None (self.timeout).
+                If 0, check queue once.
+            
+        Returns:
+            list: List of (results or None on error).
+
+        Raises:
+            TimeoutError
         """
         fs = self.rpc_multi_async(requests_lst)
         return [f.safe_get(timeout=timeout) for f in fs]
 
     def rpc_async_fn(self, fn, args=[], kwargs={}):
+        """Sends an asynchronous single request with a local python function.
+    
+        Args:
+            fn (function): Local function.
+            args (list): Positional args.
+            kwargs (dict): Named args.
+        
+        Returns:
+            AsyncResult:
+            
+        Returns:
+            result
+
+        Raises:
+            TimeoutError
+            RemoteException
+        """
         py_call = serialize_python_call(fn, args=args, kwargs=kwargs)
         id = self.send_single_request("eval_py_function", args=py_call)
         return AsyncResult(self, id)
 
     def rpc_sync_fn(self, method, args=[], kwargs={}, timeout=None):
+        """Sends a synchronous single request with a local python function.
+    
+        Args:
+            fn (function): Local function.
+            args (list): Positional args.
+            kwargs (dict): Named args.
+            timeout (float, optional): Defaults to None (self.timeout).
+                If 0, check queue once.
+            
+        Returns:
+            result
+
+        Raises:
+            TimeoutError
+            RemoteException
+        """
         return self.rpc_async_fn(method, args, kwargs).get(timeout)

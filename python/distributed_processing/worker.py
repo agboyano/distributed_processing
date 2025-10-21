@@ -62,6 +62,24 @@ class Worker():
         # no olvidar self.update_registry()
 
     def add_python_eval(self, queue="py_eval", register=True):
+        """Adds eval_py_function that evals a sent python function.
+
+        Equivalent to:
+        
+        import dill
+        import base64
+
+        def eval_py_function(str_fn, args=[], kwargs={}):
+            "str_fn encoded en base64 ascii"
+            return dill.loads(base64.b64decode(str_fn))(*args, **kwargs)
+
+        server.add_requests_queue("py_eval", {"eval_py_function": eval_py_function})
+        
+        Args:
+            queue (str): Defaults to 'py_eval'
+            register (bool): Register function. Defaults to True. 
+
+        """
         self.add_function(queue, "eval_py_function", eval_py_function, register)
 
     def add_requests_queues(self, queues):
