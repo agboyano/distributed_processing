@@ -1,6 +1,12 @@
 from time import time
+from datetime import datetime
+import logging
 from .exceptions import RemoteException
 
+logger = logging.getLogger(__name__)
+
+def timestamp():
+    return datetime.now().isoformat()
 
 PENDING = 'PENDING'
 OK = 'OK'
@@ -9,7 +15,7 @@ CLEANED = 'CLEANED'
 
 class AsyncResult(object):
 
-    def __init__(self, rpc_client, id):
+    def __init__(self, rpc_client, id, request=None, queue=None):
         self._client = rpc_client
         self.id = id
         self._status = PENDING
@@ -17,6 +23,9 @@ class AsyncResult(object):
         self.error = None
         self.creation_time = time()
         self.finished_time = None
+        self.request = request
+        self.queue = queue
+        self.retries = 0
 
     def ok(self):
         return self.status == OK
@@ -126,5 +135,33 @@ class AsyncResult(object):
         except:
             return default
         
+    def retry(self, queue=None):
+        """Retries the request linked to the AsyncResult instance.
+
+        Only retries if the request is pending.
+        
+        Args:
+            queue (str, optional): queue to sent the request. Defaults to None.
+                If None, selects the queue based on:
+                - Available queues for the method if client's `check_registry` is 'Always' or 'Cache'
+                - Client's `default_requests_queue` attribute otherwise.
+
+        Returns:
+            bool: True if the request has been retried, False if not (request already received).
+        
+        """
+        if self.request is None:
+            raise ValueError("AsyncResult.retry(): request info is None. Can not retry.")
+        if self.pending():
+            method, args, kwargs = self.request
+            new_id, new_queue = self._client.send_single_request(method, args, kwargs, self.id, queue=queue)
+            logger.debug(f"{timestamp()} Client: {self._client.client_id} retrying request with id: {self.id} to queue: {new_queue}")
+            self.queue = queue
+            assert new_id == self.id
+            self.retries += 1
+        else:
+            logger.debug(f"{timestamp()} Not Retrying: Request with id: {self.id} is already received.")
+
+
 def gather(async_result_lst):
     pass

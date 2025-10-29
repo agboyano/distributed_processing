@@ -219,6 +219,7 @@ class FileSystemConnector(object):
     
         queue_refs = [(q, self.namespace.list(q)) for q in queue_names]
 
+        # Walrus operator, introduced in Python 3.8
         if ok:=try_pop_multiple(queue_refs):
             return ok
       
@@ -239,7 +240,7 @@ class FileSystemConnector(object):
                 sleep(*self.pop_sleep_watchdog)
             else:
                 sleep(*self.pop_sleep)
-            
+            # Walrus operator, introduced in Python 3.8
             if ok:=try_pop_multiple(queue_refs):
                 return ok  
 

@@ -1,4 +1,5 @@
 import traceback
+from time import time
 
 
 def single_request(method, args=None, kwargs=None, id=None, is_notification=False, reply_to=None, **options):
@@ -67,7 +68,7 @@ def error_response(code, id=None, reply_to=None, is_notification=False, with_tra
 
 
 def result_response(result=None, id=None, reply_to=None, is_notification=False):
-
+    # is_notification to be removed.
     rr = {"result": result, "is_notification": is_notification}
 
     if id is not None:
@@ -78,10 +79,15 @@ def result_response(result=None, id=None, reply_to=None, is_notification=False):
 
     return rr
 
+def ack(id, worker, queue):
+    return {"ack":{"id":id, "worker":worker, "queue":queue, "time":time()}}
+
+def is_ack(response):
+    return "ack" in response
 
 def is_single_response(response):
     return isinstance(response, dict) and ("result" in response or "error" in response)
 
 
-def is_multiple_response(response):
+def is_batch_response(response):
     return isinstance(response, list) and len(response) > 0 and is_single_response(response[0])

@@ -117,7 +117,7 @@ class FSUDict:
 
                 try:
                     temp_path.rename(target_path)
-                except FileExistsError:
+                except (FileExistsError, PermissionError):
                     target_path.unlink()
                     temp_path.rename(target_path)
             finally:
@@ -476,7 +476,7 @@ def acquire_lock(base_path, lock_name, timeout=-1.0, watchdog_timeout=19, wait=(
             # Atomically create a directory (mkdir is atomic on most FS)
             os.mkdir(abs_path)
             return True
-        except FileExistsError:
+        except (FileExistsError, PermissionError):
             return False
 
     if try_lock():
